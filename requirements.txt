@@ -1,0 +1,10 @@
+Flask
+Flask-Cors
+mysql-connector-python
+SQLAlchemy
+pandas
+numpy
+scikit-learn
+openpyxl
+python-dotenv
+Werkzeug
