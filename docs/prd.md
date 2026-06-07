@@ -878,7 +878,9 @@ Loyalty menunjukkan lama hubungan pelanggan dengan perusahaan.
 
 Rumus:
 
-Tanggal analisis dikurangi tanggal aktif pelanggan.
+Tanggal analisis dikurangi tanggal aktif pelanggan. Jika tanggal aktif tidak
+tersedia, Loyalty dihitung dari selisih transaksi pembayaran relevan pertama
+dengan transaksi pembayaran relevan terakhir sampai tanggal analisis.
 
 Sumber data:
 

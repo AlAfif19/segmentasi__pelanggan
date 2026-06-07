@@ -88,14 +88,19 @@ npm run build
 ## Catatan Loyalty
 
 CSV pelanggan terbaru tidak memiliki kolom tanggal aktif. Dalam kondisi ini,
-`active_date` disimpan sebagai `NULL` dan nilai Loyalty menjadi `0` untuk semua
-pelanggan. Fitur konstan tersebut tidak memengaruhi jarak K-Means setelah scaling,
-sehingga proses tetap aman secara komputasi, tetapi model secara efektif memakai
-RFMC, bukan LRFMC penuh.
+`active_date` disimpan sebagai `NULL` dan Loyalty dihitung dari selisih transaksi
+pembayaran relevan pertama dengan transaksi pembayaran relevan terakhir. Jika
+tanggal aktif tersedia, tanggal aktif tetap menjadi sumber utama. Pelanggan
+dengan satu atau tanpa transaksi relevan memiliki Loyalty nol.
 
 Gunakan XLSX yang memiliki `TGL AKTIF` bila penelitian harus mengevaluasi dimensi
-Loyalty. Jangan mengganti tanggal aktif dengan `Masa Aktif`, `Jatuh Tempo`, atau
-`Suspend` karena ketiganya memiliki makna berbeda.
+Loyalty berdasarkan masa berlangganan aktual. Jangan mengganti tanggal aktif
+dengan `Masa Aktif`, `Jatuh Tempo`, atau `Suspend` karena maknanya berbeda.
+
+Model produksi memakai konfigurasi konsisten `log1p` pada Frequency dan Monetary,
+winsorization 1%, dan `StandardScaler`. Konfigurasi ini dipilih melalui
+perbandingan lintas periode terhadap `RobustScaler`; hasilnya tersedia di
+`docs/research/scaler-comparison.md`.
 
 ## Benchmark Black-Box
 

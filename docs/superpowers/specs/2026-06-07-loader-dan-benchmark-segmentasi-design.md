@@ -99,9 +99,9 @@ periode, jumlah pelanggan hasil sama dengan jumlah pelanggan yang diproses,
 jumlah anggota segmen menjumlah ke total hasil, metrik evaluasi berupa angka
 valid, dan hasil dapat dibuka serta diunduh dari web.
 
-Keterbatasan penelitian dicatat: CSV terbaru tidak menyediakan `active_date`.
-Akibatnya nilai Loyalty untuk pelanggan dari CSV menjadi nol/default dan perlu
-disebutkan saat membandingkan hasil dengan XLSX yang memiliki tanggal aktivasi.
+CSV terbaru tidak menyediakan `active_date`. Implementasi lanjutan menggunakan
+rentang transaksi pembayaran relevan pertama sampai terakhir sebagai fallback
+Loyalty, sedangkan XLSX yang memiliki tanggal aktivasi tetap memakai tanggal aktif.
 
 ## Strategi Otomasi
 

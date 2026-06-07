@@ -1,0 +1,9 @@
+period,period_label,name,scaler,optimal_k,silhouette_score,davies_bouldin_index,calinski_harabasz_index,period_score,global_winner
+1_month,1 bulan,logfm_standard,StandardScaler,4,0.5173737286715553,0.7350127391773988,706.307511109909,0.2,True
+1_month,1 bulan,logfm_robust,RobustScaler,5,0.5545127374975365,0.6551910049500149,677.8012824587041,0.8,False
+3_months,3 bulan,logfm_standard,StandardScaler,4,0.6008535410722706,0.5786752503678706,1074.818386413709,0.8,True
+3_months,3 bulan,logfm_robust,RobustScaler,5,0.5473816293553703,0.6393064541679028,10633.597384987357,0.2,False
+6_months,6 bulan,logfm_standard,StandardScaler,4,0.6685910624269793,0.506947665986469,1255.2298174186874,0.8,True
+6_months,6 bulan,logfm_robust,RobustScaler,6,0.5923600579598977,0.5193323476785011,8317.671613966544,0.2,False
+1_year,1 tahun,logfm_standard,StandardScaler,4,0.696458284924873,0.4557429335201923,1334.8644622913127,0.8,True
+1_year,1 tahun,logfm_robust,RobustScaler,5,0.609189946680138,0.547502587523679,7133.6500233456345,0.2,False

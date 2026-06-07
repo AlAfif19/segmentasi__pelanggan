@@ -16,6 +16,21 @@ PERIODS = {
     "1_year": ("1 tahun", 12),
     "all": ("Semua data", None),
 }
+PRODUCTION_MODEL_CONFIG = {
+    "name": "logfm_standard",
+    "transform": "log1p_frequency_monetary",
+    "scaler": "StandardScaler",
+    "winsor": 0.01,
+}
+SCALER_COMPARISON_CONFIGS = [
+    PRODUCTION_MODEL_CONFIG,
+    {
+        "name": "logfm_robust",
+        "transform": "log1p_frequency_monetary",
+        "scaler": "RobustScaler",
+        "winsor": 0.01,
+    },
+]
 
 
 def _subtract_months(value, months):
@@ -44,6 +59,71 @@ def _days_between(later, earlier, default=0):
     if not later or not earlier:
         return default
     return max((later - earlier).days, 0)
+
+
+def calculate_loyalty(analysis_date, active_date, first_transaction, last_transaction):
+    if active_date:
+        return {
+            "days": _days_between(analysis_date, active_date, default=0),
+            "source": "active_date",
+        }
+    if first_transaction and last_transaction:
+        return {
+            "days": _days_between(last_transaction, first_transaction, default=0),
+            "source": "transaction_span",
+        }
+    return {"days": 0, "source": "unavailable"}
+
+
+def select_global_scaler(rows):
+    if not rows:
+        raise ValueError("Hasil evaluasi scaler kosong")
+
+    scored = []
+    periods = sorted({row["period"] for row in rows})
+    for period in periods:
+        period_rows = [row for row in rows if row["period"] == period]
+        sil_values = [row["silhouette_score"] for row in period_rows]
+        dbi_values = [row["davies_bouldin_index"] for row in period_rows]
+        chi_values = [row["calinski_harabasz_index"] for row in period_rows]
+
+        def metric_score(value, values, invert=False):
+            low, high = min(values), max(values)
+            normalized = 0.5 if high == low else (value - low) / (high - low)
+            return 1 - normalized if invert else normalized
+
+        for row in period_rows:
+            score = (
+                metric_score(row["silhouette_score"], sil_values) * 0.45
+                + metric_score(row["davies_bouldin_index"], dbi_values, invert=True) * 0.35
+                + metric_score(row["calinski_harabasz_index"], chi_values) * 0.20
+            )
+            scored.append({**row, "period_score": score})
+
+    scalers = sorted({row["scaler"] for row in scored})
+    summaries = {}
+    for scaler in scalers:
+        scaler_rows = [row for row in scored if row["scaler"] == scaler]
+        summaries[scaler] = {
+            "score": sum(row["period_score"] for row in scaler_rows) / len(scaler_rows),
+            "silhouette": sum(row["silhouette_score"] for row in scaler_rows) / len(scaler_rows),
+            "dbi": sum(row["davies_bouldin_index"] for row in scaler_rows) / len(scaler_rows),
+        }
+
+    winner = max(
+        scalers,
+        key=lambda scaler: (
+            summaries[scaler]["score"],
+            summaries[scaler]["silhouette"],
+            -summaries[scaler]["dbi"],
+            scaler == "StandardScaler",
+        ),
+    )
+    return {
+        "winner": winner,
+        "scores": {scaler: summaries[scaler]["score"] for scaler in scalers},
+        "rows": scored,
+    }
 
 
 def _minmax(values, invert=False):
@@ -232,7 +312,11 @@ def _preparation_flow(data_understanding=None, model_config=None):
         {
             "title": "Feature Engineering LRFMC",
             "description": "L, R, F, M, dan C dibentuk dari master pelanggan dan transaksi.",
-            "processes": ["L dari lama aktif", "R dari jarak pembayaran terakhir", "C dari paket + biaya bulanan/avg payment"],
+            "processes": [
+                "L dari tanggal aktif; fallback rentang transaksi pertama-terakhir",
+                "R dari jarak pembayaran terakhir",
+                "C dari paket + biaya bulanan/avg payment",
+            ],
             "output": "Dataset LRFMC lengkap.",
         },
         {
@@ -254,7 +338,7 @@ def _preparation_flow(data_understanding=None, model_config=None):
     ]
 
 
-def _run_mysql_segmentation(period_code="all"):
+def _run_mysql_segmentation(period_code="all", candidate_configs=None):
     database_analysis_date = mysql_repository.get_analysis_date()
     if isinstance(database_analysis_date, datetime):
         database_analysis_date = database_analysis_date.date()
@@ -263,6 +347,7 @@ def _run_mysql_segmentation(period_code="all"):
     source_rows = mysql_repository.get_lrfmc_source_rows(
         period["start_date"],
         period["end_date"],
+        analysis_date,
     )
     if not source_rows:
         return None
@@ -272,10 +357,16 @@ def _run_mysql_segmentation(period_code="all"):
         period["start_date"] = date_range.get("min_date")
     period.update(mysql_repository.get_period_transaction_stats(period["start_date"], period["end_date"]))
 
-    loyalty_days = [
-        _days_between(analysis_date, row["active_date"], default=0)
+    loyalty_values = [
+        calculate_loyalty(
+            analysis_date,
+            row["active_date"],
+            row.get("first_transaction"),
+            row.get("last_transaction_all"),
+        )
         for row in source_rows
     ]
+    loyalty_days = [value["days"] for value in loyalty_values]
     observed_recency = [
         _days_between(analysis_date, row["last_transaction"], default=None)
         for row in source_rows
@@ -317,6 +408,7 @@ def _run_mysql_segmentation(period_code="all"):
             {
                 "customer_id": row["customer_id"],
                 "loyalty": float(loyalty_days[index]),
+                "loyalty_source": loyalty_values[index]["source"],
                 "recency": float(recency_scores[index]),
                 "frequency": int(frequencies[index]),
                 "monetary": float(monetary[index]),
@@ -357,13 +449,7 @@ def _run_mysql_segmentation(period_code="all"):
         from sklearn.preprocessing import RobustScaler, StandardScaler
 
         base_matrix = np.array(model_features, dtype=float)
-        candidate_configs = [
-            {"name": "baseline_standard", "transform": "raw", "scaler": "StandardScaler", "winsor": 0.01},
-            {"name": "logfm_standard", "transform": "log1p_frequency_monetary", "scaler": "StandardScaler", "winsor": 0.01},
-            {"name": "logfm_robust", "transform": "log1p_frequency_monetary", "scaler": "RobustScaler", "winsor": 0.01},
-            {"name": "raw_robust", "transform": "raw", "scaler": "RobustScaler", "winsor": 0.01},
-            {"name": "logfm_standard_winsor2", "transform": "log1p_frequency_monetary", "scaler": "StandardScaler", "winsor": 0.02},
-        ]
+        candidate_configs = candidate_configs or [PRODUCTION_MODEL_CONFIG]
         evaluated_configs = []
         max_k = min(10, len(base_matrix) - 1)
         for config in candidate_configs:
@@ -619,6 +705,9 @@ def _run_mysql_segmentation(period_code="all"):
         )
 
     saved = mysql_repository.save_segmentation(lrfmc_rows, cluster_rows, raw_metrics, optimal_k=optimal_k, iteration=iteration)
+    loyalty_sources = {}
+    for value in loyalty_values:
+        loyalty_sources[value["source"]] = loyalty_sources.get(value["source"], 0) + 1
     return {
         "rows_processed": len(lrfmc_rows),
         "evaluation": raw_metrics,
@@ -632,16 +721,22 @@ def _run_mysql_segmentation(period_code="all"):
         "feature_overview": feature_overview,
         "saved": saved,
         "period": period,
+        "loyalty": {
+            "source_counts": loyalty_sources,
+            "minimum_days": min(loyalty_days),
+            "maximum_days": max(loyalty_days),
+            "average_days": sum(loyalty_days) / len(loyalty_days),
+        },
     }
 
 
-def run_pipeline(period_code="all"):
+def run_pipeline(period_code="all", candidate_configs=None):
     if period_code not in PERIODS:
         raise ValueError(f"Periode tidak valid: {period_code}")
     mysql_result = None
     database_ready = mysql_repository.is_ready()
     if database_ready:
-        mysql_result = _run_mysql_segmentation(period_code)
+        mysql_result = _run_mysql_segmentation(period_code, candidate_configs)
     data_understanding = mysql_repository.get_data_understanding() if database_ready else {}
     result = get_results(page=1, per_page=1)
     logs = [
@@ -672,4 +767,5 @@ def run_pipeline(period_code="all"):
         "rows_processed": mysql_result["rows_processed"] if mysql_result else result["summary"].get("customers", 0),
         "database_ready": database_ready,
         "period": mysql_result["period"] if mysql_result else {"code": period_code, "label": PERIODS[period_code][0]},
+        "loyalty": mysql_result["loyalty"] if mysql_result else {},
     }

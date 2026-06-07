@@ -426,17 +426,24 @@ def find_user_by_username(username):
     )
 
 
-def get_lrfmc_source_rows(start_date=None, end_date=None):
+def get_lrfmc_source_rows(start_date=None, end_date=None, analysis_date=None):
     ensure_runtime_schema()
     date_clauses = []
-    params = []
+    period_params = []
     if start_date:
         date_clauses.append("t.transaction_date >= %s")
-        params.append(start_date)
+        period_params.append(start_date)
     if end_date:
         date_clauses.append("t.transaction_date < DATE_ADD(%s, INTERVAL 1 DAY)")
-        params.append(end_date)
+        period_params.append(end_date)
     transaction_filter = "".join(f" AND {clause}" for clause in date_clauses)
+    history_end_date = analysis_date or end_date
+    history_filter = (
+        "AND transaction_date < DATE_ADD(%s, INTERVAL 1 DAY)"
+        if history_end_date
+        else ""
+    )
+    params = ([history_end_date] if history_end_date else []) + period_params
     return fetch_all(
         f"""
         SELECT
@@ -474,12 +481,33 @@ def get_lrfmc_source_rows(start_date=None, end_date=None):
                 OR UPPER(COALESCE(t.transaction_type, '')) LIKE '%BAYAR%'
               )
             THEN t.transaction_date
-          END) AS last_transaction
+          END) AS last_transaction,
+          history.first_transaction,
+          history.last_transaction_all
         FROM customers c
+        LEFT JOIN (
+          SELECT
+            customer_id,
+            MIN(transaction_date) AS first_transaction,
+            MAX(transaction_date) AS last_transaction_all
+          FROM transactions
+          WHERE customer_id IS NOT NULL
+            AND money_in > 0
+            AND transaction_date IS NOT NULL
+            AND (
+              UPPER(COALESCE(transaction_type, '')) LIKE '%TAGIHAN%'
+              OR UPPER(COALESCE(transaction_type, '')) LIKE '%PEMBAYARAN%'
+              OR UPPER(COALESCE(transaction_type, '')) LIKE '%BAYAR%'
+            )
+            {history_filter}
+          GROUP BY customer_id
+        ) history ON history.customer_id = c.customer_id
         LEFT JOIN transactions t
           ON t.customer_id = c.customer_id
           {transaction_filter}
-        GROUP BY c.customer_id, c.name, c.active_date, c.category, c.monthly_fee
+        GROUP BY
+          c.customer_id, c.name, c.active_date, c.category, c.monthly_fee,
+          history.first_transaction, history.last_transaction_all
         ORDER BY c.customer_id
         """,
         tuple(params),
