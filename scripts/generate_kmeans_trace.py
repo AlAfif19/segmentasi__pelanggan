@@ -3,6 +3,7 @@
 from datetime import date, datetime
 from pathlib import Path
 import sys
+import unicodedata
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,12 +169,14 @@ def _build_probability_steps(source_rows, scaled_matrix):
         scaled_matrix,
         n_clusters=N_CLUSTERS,
         random_state=RANDOM_STATE,
+        n_local_trials=1,
     )
     steps = []
     for selection_index, customer_index in enumerate(selected_indices):
         step = {
             "selection": selection_index + 1,
             "customer_id": str(source_rows[int(customer_index)]["customer_id"]),
+            "customer_name": source_rows[int(customer_index)]["name"],
             "nearest_d_squared": None,
             "total_d_squared": None,
             "selected_probability": None,
@@ -243,6 +246,7 @@ def build_actual_model_trace():
         assignments.append(
             {
                 "customer_id": str(source_rows[index]["customer_id"]),
+                "customer_name": source_rows[index]["name"],
                 "raw_lrfmc": _raw_lrfmc(raw_matrix[index]),
                 "distances": [
                     float(distance) for distance in distances[index]
@@ -296,12 +300,18 @@ def _format_rupiah(value, decimals=0):
 
 
 def _markdown_table(headers, rows):
+    def clean(value):
+        text = str(value).replace("|", r"\|")
+        return "".join(
+            char for char in text if unicodedata.category(char) != "Cf"
+        )
+
     lines = [
-        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(clean(header) for header in headers) + " |",
         "| " + " | ".join("---" for _ in headers) + " |",
     ]
     lines.extend(
-        "| " + " | ".join(str(value) for value in row) + " |"
+        "| " + " | ".join(clean(value) for value in row) + " |"
         for row in rows
     )
     return "\n".join(lines)
@@ -315,9 +325,15 @@ def render_markdown_tables(trace):
             [
                 step["selection"],
                 step["customer_id"],
+                step["customer_name"],
                 _format_decimal(step["nearest_d_squared"], 6),
                 _format_decimal(step["total_d_squared"], 6),
-                _format_decimal(step["selected_probability"], 8),
+                _format_decimal(
+                    None
+                    if step["selected_probability"] is None
+                    else step["selected_probability"] * 100,
+                    6,
+                ),
             ]
         )
 
@@ -327,6 +343,7 @@ def render_markdown_tables(trace):
         assignment_rows.append(
             [
                 row["customer_id"],
+                row["customer_name"],
                 _format_decimal(raw["loyalty"], 2),
                 _format_decimal(raw["recency"], 4),
                 _format_decimal(raw["frequency"], 0),
@@ -362,10 +379,11 @@ def render_markdown_tables(trace):
         _markdown_table(
             [
                 "Pemilihan",
-                "Pelanggan Terpilih",
+                "No. Pelanggan",
+                "Nama Pelanggan",
                 "D(x)^2 Terdekat",
                 "Total D(x)^2",
-                "Probabilitas",
+                "Probabilitas (%)",
             ],
             probability_rows,
         ),
@@ -380,6 +398,7 @@ def render_markdown_tables(trace):
         _markdown_table(
             [
                 "Customer ID",
+                "Nama Pelanggan",
                 "L",
                 "R",
                 "F",
@@ -420,6 +439,8 @@ def render_markdown_tables(trace):
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     print(render_markdown_tables(build_actual_model_trace()))
 
 

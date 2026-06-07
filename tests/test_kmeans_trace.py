@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import unicodedata
 
 import pytest
 
@@ -42,17 +43,18 @@ def test_probability_steps_reproduce_weighted_kmeans_plus_plus():
     assert [step["customer_id"] for step in steps] == [
         "10036056",
         "10276409",
-        "10000745",
-        "10086292",
+        "10105764",
+        "10072037",
     ]
     assert steps[0]["nearest_d_squared"] is None
     assert steps[0]["total_d_squared"] is None
     assert steps[0]["selected_probability"] is None
+    assert all(step["customer_name"] for step in steps)
 
     expected = [
         (13.48952934274697, 10597.089886415639, 0.001272946581309944),
-        (6.8774296096583, 2721.368454902594, 0.0025271953150145794),
-        (40.88828001294015, 661.8010325441805, 0.06178334273029489),
+        (40.88828001294015, 2721.368454902594, 0.015024896735052244),
+        (7.00851197462216, 2393.84676405324, 0.002927719551587091),
     ]
     for step, (distance_squared, total, probability) in zip(steps[1:], expected):
         assert step["nearest_d_squared"] == pytest.approx(distance_squared)
@@ -96,6 +98,7 @@ def test_first_twenty_assignments_are_exact_and_use_distance_argmin():
         (row["customer_id"], row["nearest_cluster"], row["segment_label"])
         for row in assignments
     ] == expected
+    assert assignments[0]["customer_name"] == "Aswin / Batagor"
     assert len(assignments) == 20
     assert [row["customer_id"] for row in assignments] == sorted(
         row["customer_id"] for row in assignments
@@ -151,6 +154,10 @@ def test_rendered_markdown_has_indonesian_tables_and_expected_rows():
     assert "## Assignment 20 Pelanggan" in markdown
     assert "## Update Centroid Akhir" in markdown
     assert "bukan rekaman internal" in markdown
+    assert "Nama Pelanggan" in markdown
+    assert "Probabilitas (%)" in markdown
+    assert "Aswin / Batagor" in markdown
+    assert not any(unicodedata.category(char) == "Cf" for char in markdown)
     assert "Rp 1.100.000" in markdown
     assert "0,2153" in markdown
 
