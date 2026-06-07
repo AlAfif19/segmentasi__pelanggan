@@ -39,7 +39,6 @@ def get_summary():
         SELECT
           (SELECT COUNT(*) FROM customers) AS customers,
           (SELECT COUNT(*) FROM transactions) AS transactions,
-          (SELECT COALESCE(SUM(money_in), 0) FROM transactions) AS total_revenue,
           (SELECT MAX(loaded_at) FROM datasets) AS loaded_at
         """
     )
@@ -48,7 +47,6 @@ def get_summary():
     return {
         "customers": row["customers"] or 0,
         "transactions": row["transactions"] or 0,
-        "total_revenue": float(row["total_revenue"] or 0),
         "loaded_at": str(row["loaded_at"]) if row["loaded_at"] else None,
         "algorithm": "K-Means Plus",
         "segment_levels": ["Low", "Medium", "High"],
@@ -428,10 +426,19 @@ def find_user_by_username(username):
     )
 
 
-def get_lrfmc_source_rows():
+def get_lrfmc_source_rows(start_date=None, end_date=None):
     ensure_runtime_schema()
+    date_clauses = []
+    params = []
+    if start_date:
+        date_clauses.append("t.transaction_date >= %s")
+        params.append(start_date)
+    if end_date:
+        date_clauses.append("t.transaction_date < DATE_ADD(%s, INTERVAL 1 DAY)")
+        params.append(end_date)
+    transaction_filter = "".join(f" AND {clause}" for clause in date_clauses)
     return fetch_all(
-        """
+        f"""
         SELECT
           c.customer_id,
           c.name,
@@ -469,10 +476,13 @@ def get_lrfmc_source_rows():
             THEN t.transaction_date
           END) AS last_transaction
         FROM customers c
-        LEFT JOIN transactions t ON t.customer_id = c.customer_id
+        LEFT JOIN transactions t
+          ON t.customer_id = c.customer_id
+          {transaction_filter}
         GROUP BY c.customer_id, c.name, c.active_date, c.category, c.monthly_fee
         ORDER BY c.customer_id
-        """
+        """,
+        tuple(params),
     )
 
 
@@ -609,6 +619,54 @@ def get_embedded_preview(limit=10):
 def get_analysis_date():
     row = fetch_one("SELECT COALESCE(MAX(transaction_date), CURRENT_DATE()) AS analysis_date FROM transactions")
     return row["analysis_date"] if row else None
+
+
+def get_transaction_date_range(end_date=None):
+    where = "WHERE transaction_date < DATE_ADD(%s, INTERVAL 1 DAY)" if end_date else ""
+    params = (end_date,) if end_date else ()
+    row = fetch_one(
+        f"""
+        SELECT MIN(transaction_date) AS min_date, MAX(transaction_date) AS max_date
+        FROM transactions
+        {where}
+        """,
+        params,
+    )
+    return row or {"min_date": None, "max_date": None}
+
+
+def get_period_transaction_stats(start_date, end_date):
+    clauses = ["transaction_date IS NOT NULL"]
+    params = []
+    if start_date:
+        clauses.append("transaction_date >= %s")
+        params.append(start_date)
+    if end_date:
+        clauses.append("transaction_date < DATE_ADD(%s, INTERVAL 1 DAY)")
+        params.append(end_date)
+    where = " AND ".join(clauses)
+    row = fetch_one(
+        f"""
+        SELECT
+          COUNT(*) AS transaction_count,
+          SUM(
+            customer_id IS NOT NULL
+            AND money_in > 0
+            AND (
+              UPPER(COALESCE(transaction_type, '')) LIKE '%%TAGIHAN%%'
+              OR UPPER(COALESCE(transaction_type, '')) LIKE '%%PEMBAYARAN%%'
+              OR UPPER(COALESCE(transaction_type, '')) LIKE '%%BAYAR%%'
+            )
+          ) AS relevant_transaction_count
+        FROM transactions
+        WHERE {where}
+        """,
+        tuple(params),
+    )
+    return {
+        "transaction_count": int((row or {}).get("transaction_count") or 0),
+        "relevant_transaction_count": int((row or {}).get("relevant_transaction_count") or 0),
+    }
 
 
 def save_segmentation(lrfmc_rows, cluster_rows, metrics, optimal_k=3, iteration=0):

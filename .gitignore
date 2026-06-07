@@ -17,6 +17,9 @@ exports/
 data_source/raw/*
 !data_source/raw/.gitkeep
 
+docs/research/blackbox-segmentation_result.csv
+Reference/
+
 venv/
 .venv/
 

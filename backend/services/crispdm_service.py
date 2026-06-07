@@ -1,9 +1,43 @@
+import calendar
+from datetime import date, datetime
+
 from repositories import mysql_repository
 from services.evaluation_service import calculate_metrics
 from services.kmeansplus_service import run_kmeansplus
 from services.lrfmc_service import build_combination
 from services.preprocessing_service import run_preprocessing
 from services.result_service import get_results
+
+
+PERIODS = {
+    "1_month": ("1 bulan", 1),
+    "3_months": ("3 bulan", 3),
+    "6_months": ("6 bulan", 6),
+    "1_year": ("1 tahun", 12),
+    "all": ("Semua data", None),
+}
+
+
+def _subtract_months(value, months):
+    month_index = value.year * 12 + value.month - 1 - months
+    year, zero_based_month = divmod(month_index, 12)
+    month = zero_based_month + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def resolve_period(code, analysis_date):
+    if code not in PERIODS:
+        raise ValueError(f"Periode tidak valid: {code}")
+    if isinstance(analysis_date, datetime):
+        analysis_date = analysis_date.date()
+    label, months = PERIODS[code]
+    return {
+        "code": code,
+        "label": label,
+        "start_date": _subtract_months(analysis_date, months) if months else None,
+        "end_date": analysis_date,
+    }
 
 
 def _days_between(later, earlier, default=0):
@@ -158,8 +192,13 @@ def _preparation_flow(data_understanding=None, model_config=None):
     return [
         {
             "title": "Standarisasi Kolom",
-            "description": "Kolom Excel master dan mutasi diseragamkan menjadi struktur MySQL.",
-            "processes": ["NOPEL -> customer_id", "NAMA PELANGGAN -> name", "PAKET -> category", "TOTAL TARIF -> monthly_fee"],
+            "description": "Kolom CSV/XLSX master dan XLSX mutasi diseragamkan menjadi struktur MySQL.",
+            "processes": [
+                "No Pelanggan/NOPEL -> customer_id",
+                "Nama/NAMA PELANGGAN -> name",
+                "Paket/PAKET -> category",
+                "Total/TOTAL TARIF -> monthly_fee",
+            ],
             "output": "customers dan transactions siap dibaca pipeline.",
         },
         {
@@ -215,12 +254,24 @@ def _preparation_flow(data_understanding=None, model_config=None):
     ]
 
 
-def _run_mysql_segmentation():
-    source_rows = mysql_repository.get_lrfmc_source_rows()
+def _run_mysql_segmentation(period_code="all"):
+    database_analysis_date = mysql_repository.get_analysis_date()
+    if isinstance(database_analysis_date, datetime):
+        database_analysis_date = database_analysis_date.date()
+    analysis_date = min(database_analysis_date or date.today(), date.today())
+    period = resolve_period(period_code, analysis_date)
+    source_rows = mysql_repository.get_lrfmc_source_rows(
+        period["start_date"],
+        period["end_date"],
+    )
     if not source_rows:
         return None
 
-    analysis_date = mysql_repository.get_analysis_date()
+    date_range = mysql_repository.get_transaction_date_range(period["end_date"])
+    if period["start_date"] is None:
+        period["start_date"] = date_range.get("min_date")
+    period.update(mysql_repository.get_period_transaction_stats(period["start_date"], period["end_date"]))
+
     loyalty_days = [
         _days_between(analysis_date, row["active_date"], default=0)
         for row in source_rows
@@ -580,14 +631,17 @@ def _run_mysql_segmentation():
         "scatter_3d": scatter_3d[:250],
         "feature_overview": feature_overview,
         "saved": saved,
+        "period": period,
     }
 
 
-def run_pipeline():
+def run_pipeline(period_code="all"):
+    if period_code not in PERIODS:
+        raise ValueError(f"Periode tidak valid: {period_code}")
     mysql_result = None
     database_ready = mysql_repository.is_ready()
     if database_ready:
-        mysql_result = _run_mysql_segmentation()
+        mysql_result = _run_mysql_segmentation(period_code)
     data_understanding = mysql_repository.get_data_understanding() if database_ready else {}
     result = get_results(page=1, per_page=1)
     logs = [
@@ -617,4 +671,5 @@ def run_pipeline():
         "source": "mysql",
         "rows_processed": mysql_result["rows_processed"] if mysql_result else result["summary"].get("customers", 0),
         "database_ready": database_ready,
+        "period": mysql_result["period"] if mysql_result else {"code": period_code, "label": PERIODS[period_code][0]},
     }

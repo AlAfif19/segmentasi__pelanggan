@@ -1,5 +1,4 @@
 import sys
-import os
 from pathlib import Path
 
 import pandas as pd
@@ -60,11 +59,7 @@ def init_database():
         VALUES (%s, %s, %s)
         ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), role = VALUES(role)
         """,
-        (
-            os.getenv("ANALYST_USERNAME", "data_analyst"),
-            generate_password_hash(os.getenv("ANALYST_PASSWORD", "change_this_password")),
-            "Data Analyst",
-        ),
+        ("data_analyst", generate_password_hash("password"), "Data Analyst"),
     )
 
 
@@ -101,7 +96,7 @@ def load_customer_rows(customers):
         INSERT INTO datasets (filename, row_count)
         VALUES (%s, %s)
         """,
-        ("exported_data.xlsx", len(rows)),
+        (customers.attrs.get("source_file", "exported_data"), len(rows)),
     )
     return rows
 

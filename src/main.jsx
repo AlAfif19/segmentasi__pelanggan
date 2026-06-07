@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   BarChart3,
   CheckCircle2,
+  ChevronRight,
   Database,
   Download,
   FileJson,
@@ -15,6 +16,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Play,
+  ShieldCheck,
   Workflow,
   X,
 } from "lucide-react";
@@ -65,11 +67,6 @@ function fmt(value) {
 function decimal(value) {
   if (value === null || value === undefined || value === "") return "-";
   return Number(value).toFixed(3);
-}
-
-function rupiah(value) {
-  if (value === null || value === undefined || value === "") return "-";
-  return `Rp ${new Intl.NumberFormat("id-ID").format(Number(value || 0))}`;
 }
 
 function pct(value) {
@@ -411,9 +408,31 @@ function Dashboard({ setPage, refreshKey }) {
       <div className="grid gap-4 md:grid-cols-3">
         <Metric label="Total Pelanggan" value={fmt(summary.customers || 0)} note="Dari tabel customers" />
         <Metric label="Total Mutasi" value={fmt(summary.transactions || 0)} note="Dari tabel transactions" />
-        <Metric label="Total Pendapatan" value={rupiah(summary.total_revenue || 0)} note="Total money_in transaksi" compact />
+        <Metric label="Algoritma" value={summary.algorithm || "K-Means Plus"} note={`Level segmen: ${(summary.segment_levels || ["Low", "Medium", "High"]).join(", ")}`} compact />
       </div>
-      <div className="mt-4">
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1.2fr]">
+        <Card>
+          <CardTitle title="Tahapan PRD" subtitle="Alur fitur utama sistem." />
+          <div className="grid gap-3">
+            {[
+              ["Login", "Autentikasi Data Analyst", ShieldCheck, "dashboard"],
+              ["Data Tertanam", "Preview sumber data dari MySQL", Database, "data"],
+              ["Proses Segmentasi", "Pipeline CRISP-DM dan K-Means Plus", Workflow, "process"],
+              ["Lihat Hasil", "Grafik, karakteristik cluster, dan tabel hasil", BarChart3, "result"],
+            ].map(([title, text, Icon, target]) => (
+              <button key={title} onClick={() => setPage(target)} className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-3 text-left transition hover:border-slate-300 hover:bg-slate-50">
+                <div className="grid h-9 w-9 place-items-center rounded-md bg-slate-100 text-slate-700">
+                  <Icon size={17} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-slate-950">{title}</p>
+                  <p className="text-xs text-slate-500">{text}</p>
+                </div>
+                <ChevronRight size={16} className="text-slate-400" />
+              </button>
+            ))}
+          </div>
+        </Card>
         <Card>
           <CardTitle title="Evaluasi Model Terakhir" subtitle="Data diambil dari tabel evaluation_metrics." />
           <EvaluationTable evaluation={data.evaluation} />
@@ -491,18 +510,21 @@ function DataEmbedded({ refreshKey }) {
 
 function Process({ setPage, processState, setProcessState, onRefresh }) {
   const { running, done, result, error } = processState;
+  const [period, setPeriod] = useState(processState.period || "all");
 
   async function start() {
-    setProcessState({ running: true, done: 0, result: null, error: "" });
+    setProcessState({ running: true, done: 0, result: null, error: "", period });
     let index = 0;
+    const startedAt = performance.now();
     const timer = setInterval(() => {
       index += 1;
       setProcessState((current) => ({ ...current, done: Math.min(index, pipelineSteps.length) }));
       if (index >= pipelineSteps.length) clearInterval(timer);
     }, 160);
     try {
-      const response = await api("/segmentation/run", { method: "POST", body: JSON.stringify({}) });
-      setProcessState({ running: false, done: pipelineSteps.length, result: response, error: "" });
+      const response = await api("/segmentation/run", { method: "POST", body: JSON.stringify({ period }) });
+      response.duration_seconds = (performance.now() - startedAt) / 1000;
+      setProcessState({ running: false, done: pipelineSteps.length, result: response, error: "", period });
       onRefresh();
     } catch (err) {
       setProcessState((current) => ({ ...current, running: false, done: pipelineSteps.length, error: err.message }));
@@ -514,16 +536,35 @@ function Process({ setPage, processState, setProcessState, onRefresh }) {
   const completed = result?.status === "completed";
   return (
     <>
-      <Header title="Proses Segmentasi" subtitle="Pipeline CRISP-DM, preprocessing, K-Means Plus, dan evaluasi model." action={<Badge tone={completed ? "green" : result ? "amber" : "slate"}>{completed ? "Segmentasi selesai" : result?.status || "Siap dijalankan"}</Badge>} />
+      <Header title="Proses Segmentasi" subtitle="Pipeline CRISP-DM, preprocessing, K-Means Plus, dan evaluasi model." action={<span data-testid="segmentation-status"><Badge tone={completed ? "green" : result ? "amber" : "slate"}>{completed ? "Segmentasi selesai" : result?.status || "Siap dijalankan"}</Badge></span>} />
       {error ? <Alert tone="red">{error}</Alert> : null}
       {result && !completed ? <Alert>Pipeline belum selesai. Pastikan MySQL aktif dan data sudah diload.</Alert> : null}
+      <Card className="mb-4">
+        <div className="grid items-end gap-4 md:grid-cols-[minmax(0,320px)_1fr]">
+          <Field label="Periode transaksi">
+            <Select
+              data-testid="period-select"
+              value={period}
+              disabled={running}
+              onChange={(event) => setPeriod(event.target.value)}
+            >
+              <option value="1_month">1 bulan</option>
+              <option value="3_months">3 bulan</option>
+              <option value="6_months">6 bulan</option>
+              <option value="1_year">1 tahun</option>
+              <option value="all">Semua data sampai hari ini</option>
+            </Select>
+          </Field>
+          <p className="text-sm text-slate-500">Frequency, monetary, dan transaksi terakhir dihitung hanya dari periode yang dipilih.</p>
+        </div>
+      </Card>
       <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <Card>
           <CardTitle
             title="Progress Log"
             subtitle={`${done}/${pipelineSteps.length} tahapan`}
             action={
-              <Button onClick={start} disabled={running}>
+              <Button data-testid="start-segmentation" onClick={start} disabled={running}>
                 {running ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
                 Start Pipeline
               </Button>
@@ -543,6 +584,15 @@ function Process({ setPage, processState, setProcessState, onRefresh }) {
         </Card>
         <Card>
           <CardTitle title="Evaluasi Model" subtitle={`Rows processed: ${fmt(result?.rows_processed || 0)}`} />
+          {result?.period ? (
+            <div data-testid="period-result" className="mb-4 grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm sm:grid-cols-2">
+              <span><strong>Periode:</strong> {result.period.label}</span>
+              <span><strong>Rentang:</strong> {fmt(result.period.start_date)} - {fmt(result.period.end_date)}</span>
+              <span><strong>Total transaksi:</strong> {fmt(result.period.transaction_count)}</span>
+              <span><strong>Transaksi relevan:</strong> {fmt(result.period.relevant_transaction_count)}</span>
+              <span><strong>Durasi UI:</strong> {decimal(result.duration_seconds)} detik</span>
+            </div>
+          ) : null}
           <EvaluationTable evaluation={result?.evaluation} />
           <div className="mt-5 flex flex-wrap gap-3">
             <Button onClick={() => setPage("result")} disabled={!completed}>
